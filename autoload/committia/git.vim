@@ -10,9 +10,15 @@ else
     endfunction
 endif
 
+function! committia#git#load() abort
+    " Forces this file to load so the variables are defined
+endfunction
+
 let g:committia#git#cmd = get(g:, 'committia#git#cmd', 'git')
 let g:committia#git#diff_cmd = get(g:, 'committia#git#diff_cmd', 'diff -u --cached --no-color --no-ext-diff')
+let g:committia#git#term_diff_cmd = get(g:, 'committia#git#term_diff_cmd', '-c delta.paging=never diff -u --cached')
 let g:committia#git#status_cmd = get(g:, 'committia#git#status_cmd', '-c color.status=false status -b')
+let g:committia#git#term_status_cmd = get(g:, 'committia#git#term_status_cmd', 'status -b')
 
 try
     silent call vimproc#version()

@@ -8,6 +8,7 @@ let g:committia_diff_window_opencmd = get(g:, 'committia_diff_window_opencmd', '
 let g:committia_status_window_opencmd = get(g:, 'committia_status_window_opencmd', 'belowright split')
 let g:committia_singlecolumn_diff_window_opencmd = get(g:, 'committia_singlecolumn_diff_window_opencmd', 'belowright split')
 let g:committia_hooks = get(g:, 'committia_hooks', {})
+let g:committia_use_terminal = get(g:, 'committia_use_terminal', 1)
 
 inoremap <silent> <Plug>(committia-scroll-diff-down-half) <C-o>:call committia#scroll_window('diff', 'C-d')<CR>
 inoremap <silent> <Plug>(committia-scroll-diff-up-half) <C-o>:call committia#scroll_window('diff', 'C-u')<CR>
@@ -24,6 +25,10 @@ nnoremap <silent> <Plug>(committia-scroll-diff-up) :<C-u>call committia#scroll_w
 
 let s:current_info = {}
 
+function! s:use_terminal() abort
+    return g:committia_use_terminal && has('terminal')
+endfunction
+
 function! s:open_window(vcs, type, info, ft) abort
     let content = call('committia#' . a:vcs . '#' . a:type, [])
 
@@ -38,27 +43,99 @@ function! s:open_window(vcs, type, info, ft) abort
     setlocal nonumber bufhidden=wipe buftype=nofile readonly nolist nobuflisted noswapfile nomodifiable nomodified nofoldenable
 endfunction
 
+" In terminal mode this will open a buffer that doesn't get used
+" Implement a callback for both that moves the cursor to the start
+" DRY it up
+" Also consider what the functions in git.vim do, do we need them?
+function! s:open_term(vcs, type, info, term_opts, callback) abort
+    " FIXME
+    let foo = call('committia#' . a:vcs . '#load', [])
+
+    let coltype = a:info['singlecolumn'] ? 'singlecolumn_' : ''
+
+    execute 'silent' g:committia_{coltype}{a:type}_window_opencmd '__temp__'
+    execute 'vertical' a:info.edit_winnr . 'resize' g:committia_edit_window_width
+
+    " TODO: open all windows first
+    " let a:info[a:type . '_winnr'] = winnr('$')
+
+    let cmd = a:vcs . ' ' . get(g:, 'committia#' . a:vcs . '#term_' . a:type . '_cmd', '')
+    let term_opts = {
+    \ 'curwin': 1,
+    \ 'norestore': 1,
+    \ 'exit_cb': function('s:term_exit', [a:type, a:info, a:callback]),
+    \ }
+
+    let a:info[a:type . '_bufnr'] = term_start(cmd, extend(term_opts, a:term_opts))
+    normal bd#
+    setlocal nonumber bufhidden=wipe buftype=nofile readonly nolist nobuflisted noswapfile nomodifiable nomodified nofoldenable signcolumn=no colorcolumn=
+endfunction
+
+function! s:term_exit(type, info, callback, job, status) abort
+    if a:status != 0
+        return 0
+    endif
+
+    " Wait for the output before we manipulate the buffer
+    let bufnr = a:info[a:type . '_bufnr']
+    call term_wait(bufnr)
+    redraw
+
+    let prev_winnr = winnr()
+
+    " echom a:info
+
+    execute bufwinnr(bufnr) . 'wincmd w'
+    normal gg
+    call a:callback(a:info)
+    execute prev_winnr . 'wincmd w'
+endfunction
 
 " Open diff window.  If no diff is detected, close the window and return to
 " the original window.
 " It returns 0 if the window is not open, othewise 1
 function! s:open_diff_window(vcs, info) abort
-    call s:open_window(a:vcs, 'diff', a:info, 'git')
-    if getline(1, '$') ==# ['']
-        execute a:info.diff_winnr . 'wincmd c'
-        wincmd p
-        return 0
+    if s:use_terminal()
+        " Set GIT_PAGER if delta is not present
+        call s:open_term(a:vcs, 'diff', a:info, {}, function('s:diff_window_opened'))
+    else
+        call s:open_window(a:vcs, 'diff', a:info, 'git', term_opts)
+
+        if !s:diff_window_opened(a:info)
+            return 0
+        end
     endif
+
+    return 1
+endfunction
+
+function! s:diff_window_opened(info) abort
+    " echom "diff_window_opened"
+    " echom winnr()
+    " if readfile(bufname(a:info.diff_bufnr)) ==# ['']
+    "     execute a:info.diff_winnr . 'wincmd c'
+    "     wincmd p
+    "     return 0
+    " endif
+
     return 1
 endfunction
 
 function! s:open_status_window(vcs, info) abort
-    call s:open_window(a:vcs, 'status', a:info, 'gitcommit')
-    let status_winheight = winheight(a:info.status_bufnr)
-    if line('$') < winheight(a:info.status_bufnr)
-        execute 'resize' line('$')
+    if s:use_terminal()
+        let term_opts = {'env': {'GIT_PAGER': ''}}
+        call s:open_term(a:vcs, 'status', a:info, term_opts, function('s:status_window_opened'))
+    else
+        call s:open_window(a:vcs, 'status', a:info, 'gitcommit')
+        call s:status_window_opened(a:info)
     endif
     return 1
+endfunction
+
+function! s:status_window_opened(info) abort
+    if line('$') < winheight(0)
+        execute 'resize' line('$')
+    endif
 endfunction
 
 function! s:execute_hook(name, info) abort
@@ -75,6 +152,7 @@ function! s:remove_all_contents_except_for_commit_message(vcs) abort
         execute 'silent' line . ',$delete _'
     endif
     1
+    " FIXME: DRY
     execute 'vertical resize' g:committia_edit_window_width
 endfunction
 
@@ -135,6 +213,7 @@ function! committia#open_multicolumn(vcs) abort
     if !diff_window_opened
         return
     endif
+    " FIXME: need to deal with hooks
     call s:execute_hook('diff_open', info)
     wincmd p
 
